@@ -33,28 +33,61 @@ export const createMonitor = (id: string, label: string, diagonal: number, orien
 
 /**
  * Re-assigns labels (1, 2, 3...) to monitors based on their position.
- * Sort logic: Primary X (Left to Right), Secondary Y (Top to Bottom).
+ * Sort logic: Primary Y (Top to Bottom), Secondary X (Left to Right).
+ * Uses the visual Top-Left corner of the monitor (bounding box min X/Y) for sorting.
  */
 export const relabelMonitors = (monitors: Record<string, MonitorConfig>): Record<string, MonitorConfig> => {
     const entries = Object.entries(monitors);
-    // Tolerance for floating point comparison for "same X"
-    const COL_THRESHOLD = 0.1; 
+    // Tolerance for floating point comparison for "same row"
+    const ROW_THRESHOLD = 0.5; 
 
-    entries.sort(([, a], [, b]) => {
-        // Sort by X (Left to Right) primarily
-        const xDiff = a.x - b.x;
+    // Helper to calculate visual top-left (min X, min Y) considering rotation
+    const getVisualTopLeft = (m: MonitorConfig) => {
+        const dim = calculatePhysicalDimensions(m.diagonalInches, m.orientation);
+        const hw = dim.width / 2;
+        const hh = dim.height / 2;
+        const rad = (m.rotation || 0) * (Math.PI / 180);
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+
+        // Check all 4 corners to find min X and min Y
+        const corners = [
+            { x: -hw, y: -hh },
+            { x: hw, y: -hh },
+            { x: hw, y: hh },
+            { x: -hw, y: hh }
+        ];
+
+        let minX = Infinity;
+        let minY = Infinity;
+
+        corners.forEach(p => {
+            const gx = (p.x * cos - p.y * sin) + m.x;
+            const gy = (p.x * sin + p.y * cos) + m.y;
+            if (gx < minX) minX = gx;
+            if (gy < minY) minY = gy;
+        });
+        return { x: minX, y: minY };
+    };
+
+    // Map entries to include sortable coordinates
+    const sortedEntries = entries.map(([id, config]) => {
+        return { id, config, ...getVisualTopLeft(config) };
+    }).sort((a, b) => {
+        // Sort by Y (Top to Bottom) primarily
+        const yDiff = a.y - b.y;
         
-        if (Math.abs(xDiff) > COL_THRESHOLD) {
-            return xDiff;
+        if (Math.abs(yDiff) > ROW_THRESHOLD) {
+            return yDiff;
         }
         
-        // If roughly same X, sort by Y (Top to Bottom)
-        return a.y - b.y;
+        // If roughly same Y, sort by X (Left to Right)
+        return a.x - b.x;
     });
 
     const newMonitors: Record<string, MonitorConfig> = {};
-    entries.forEach(([id, config], index) => {
-        newMonitors[id] = { ...config, label: (index + 1).toString() };
+    sortedEntries.forEach((item, index) => {
+        newMonitors[item.id] = { ...item.config, label: (index + 1).toString() };
     });
     
     return newMonitors;
@@ -69,11 +102,11 @@ export const getDefaultConfig = (): SetupConfig => {
   const bezel = 0.3; 
 
   // Initial Layout Positions
-  // Center is Top Monitor (0,0) - Intended to be "2"
+  // Center is Top Monitor (0,0) - Intended to be "2" (or 1 depending on sort)
   const topX = 0;
   const topY = 0;
 
-  // Left - Intended to be "1"
+  // Left - Intended to be "1" (or 2)
   // Align Top of Left with Top of Center (Monitor 2)
   // Center Top Edge = topY - (topDim.height / 2)
   // Left Top Edge = leftY - (leftDim.height / 2)
@@ -105,7 +138,7 @@ export const getDefaultConfig = (): SetupConfig => {
   monitors['right'] = createMonitor('right', 'temp', 24.5, 'portrait', rightX, rightY);
   monitors['bottom'] = createMonitor('bottom', 'temp', 14, 'landscape', bottomX, bottomY);
 
-  // Apply numbering (Left->1, Top->2, Bottom->3, Right->4 based on X then Y)
+  // Apply numbering (Prioritize Top, then Left)
   monitors = relabelMonitors(monitors);
 
   return {

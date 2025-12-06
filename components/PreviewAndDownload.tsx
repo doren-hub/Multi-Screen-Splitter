@@ -41,8 +41,9 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
   const [dragRotation, setDragRotation] = useState(0);
 
   // For Resizing
-  const [resizeStartDist, setResizeStartDist] = useState(0);
-  const [resizeBaseDiagonal, setResizeBaseDiagonal] = useState(0);
+  const [resizeHandle, setResizeHandle] = useState<string | null>(null); // 'TL', 'TR', 'BL', 'BR'
+  const [resizeAnchor, setResizeAnchor] = useState({ x: 0, y: 0 }); // Fixed point in global inch space
+  const [resizeOffset, setResizeOffset] = useState({ x: 0, y: 0 }); // Center shift
   const [dragDiagonal, setDragDiagonal] = useState<number | null>(null);
 
   const [snapGuides, setSnapGuides] = useState<SnapGuides>({ x: [], y: [] });
@@ -95,10 +96,10 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
       const sin = Math.sin(rad);
 
       const corners = [
-          { x: -hw, y: -hh }, 
-          { x: hw, y: -hh },  
-          { x: hw, y: hh },   
-          { x: -hw, y: hh }   
+          { x: -hw, y: -hh }, // TL (0)
+          { x: hw, y: -hh },  // TR (1)
+          { x: hw, y: hh },   // BR (2)
+          { x: -hw, y: hh }   // BL (3)
       ];
 
       return corners.map(p => ({
@@ -240,6 +241,7 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
       // But we need to ensure containerRef is valid
       if (!containerRef.current) return;
 
+      const { clientWidth, clientHeight } = containerRef.current;
       const { clientX, clientY } = e;
       const newId = onAddMonitor();
       
@@ -309,7 +311,7 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
   };
 
   // Resize Start
-  const handleResizeStart = (e: React.MouseEvent, id: string) => {
+  const handleResizeStart = (e: React.MouseEvent, id: string, handle: string) => {
     e.preventDefault();
     e.stopPropagation();
     const m = config.monitors[id];
@@ -318,17 +320,21 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
     bringToFront(id);
     setIsResizing(true);
     setDragTargetId(id);
-    setResizeBaseDiagonal(m.diagonalInches);
+    setResizeHandle(handle);
 
-    const pxPerInch = config.ppi * scale;
-    const rect = contentRef.current.getBoundingClientRect();
-    const centerX = rect.left + (m.x - bounds.minX) * pxPerInch;
-    const centerY = rect.top + (m.y - bounds.minY) * pxPerInch;
-    
-    // Calculate distance from center to mouse
-    const dist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
-    setResizeStartDist(dist);
+    // Calculate anchor point (opposite corner)
+    const corners = getMonitorCorners(m); // [TL, TR, BR, BL]
+    let anchor = { x: 0, y: 0 };
+    // Opposite pairs: TL(0)<->BR(2), TR(1)<->BL(3)
+    if (handle === 'TL') anchor = corners[2]; 
+    else if (handle === 'TR') anchor = corners[3];
+    else if (handle === 'BR') anchor = corners[0];
+    else if (handle === 'BL') anchor = corners[1];
+
+    setResizeAnchor(anchor);
+    setResizeOffset({ x: 0, y: 0 });
     setDragDiagonal(m.diagonalInches);
+    setSnapGuides({ x: [], y: [] });
   };
 
   // Handle click to place (finalize add)
@@ -346,22 +352,127 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
       const pxPerInch = config.ppi * scale;
 
       // --- RESIZE LOGIC ---
-      if (isResizing && contentRef.current) {
+      if (isResizing && contentRef.current && resizeHandle) {
          const m = config.monitors[dragTargetId];
-         if (m) {
-            const rect = contentRef.current.getBoundingClientRect();
-            const centerX = rect.left + (m.x - bounds.minX) * pxPerInch;
-            const centerY = rect.top + (m.y - bounds.minY) * pxPerInch;
-            
-            const currentDist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
-            
-            // scale = current / initial
-            const scaleFactor = currentDist / resizeStartDist;
-            const newDiagonal = resizeBaseDiagonal * scaleFactor;
-            
-            // Limit minimum size (e.g. 2 inches)
-            setDragDiagonal(Math.max(2, newDiagonal));
+         
+         const rect = contentRef.current.getBoundingClientRect();
+         const mouseRelX = e.clientX - rect.left;
+         const mouseRelY = e.clientY - rect.top;
+         const mouseInchX = (mouseRelX / pxPerInch) + bounds.minX;
+         const mouseInchY = (mouseRelY / pxPerInch) + bounds.minY;
+
+         // Vector from anchor to mouse
+         const vx = mouseInchX - resizeAnchor.x;
+         const vy = mouseInchY - resizeAnchor.y;
+
+         // Determine Diagonal Unit Vector of the resizing direction
+         // Local aspect dimensions (size 1 diagonal)
+         const dim = calculatePhysicalDimensions(1, m.orientation);
+         const w = dim.width;
+         const h = dim.height;
+
+         // Direction in local unrotated space relative to the specific handle
+         // e.g. TL relative to BR is (-w, -h) direction
+         let localDx = 0, localDy = 0;
+         if (resizeHandle === 'TL') { localDx = -w; localDy = -h; }
+         else if (resizeHandle === 'TR') { localDx = w; localDy = -h; }
+         else if (resizeHandle === 'BR') { localDx = w; localDy = h; }
+         else if (resizeHandle === 'BL') { localDx = -w; localDy = h; }
+
+         // Rotate direction
+         const rad = (m.rotation || 0) * (Math.PI / 180);
+         const cos = Math.cos(rad);
+         const sin = Math.sin(rad);
+         const globalDx = localDx * cos - localDy * sin;
+         const globalDy = localDx * sin + localDy * cos;
+
+         // Normalize
+         const len = Math.hypot(globalDx, globalDy);
+         const ux = globalDx / len;
+         const uy = globalDy / len;
+
+         // Project mouse vector onto diagonal unit vector
+         const projection = vx * ux + vy * uy;
+
+         // --- RESIZE SNAPPING LOGIC ---
+         const SNAP_PX = 15;
+         const snapThreshold = SNAP_PX / pxPerInch;
+         let snappedProjection = projection;
+         let activeGuidesX: number[] = [];
+         let activeGuidesY: number[] = [];
+         let minSnapDist = snapThreshold;
+
+         // Find snap lines from other monitors
+         const otherMonitors = monitorList.filter(o => o.id !== dragTargetId);
+         const snapLinesX: number[] = [];
+         const snapLinesY: number[] = [];
+         
+         otherMonitors.forEach(o => {
+            const oCorners = getMonitorCorners(o);
+            oCorners.forEach(c => {
+                snapLinesX.push(c.x);
+                snapLinesY.push(c.y);
+            });
+            // Also center lines
+            snapLinesX.push(o.x);
+            snapLinesY.push(o.y);
+         });
+
+         // Check intersection with X snap lines
+         // Line equation: P = Anchor + t * U
+         // Anchor.x + t * ux = LineX  => t = (LineX - Anchor.x) / ux
+         if (Math.abs(ux) > 0.01) {
+             snapLinesX.forEach(lineX => {
+                 const t = (lineX - resizeAnchor.x) / ux;
+                 if (t > 2) { // Minimum size constraint check
+                     // Resulting point
+                     const py = resizeAnchor.y + t * uy;
+                     // Distance from mouse to this intersection point
+                     // (Approximation: Use distance along the diagonal)
+                     if (Math.abs(t - projection) < minSnapDist) {
+                         minSnapDist = Math.abs(t - projection);
+                         snappedProjection = t;
+                         activeGuidesX = [lineX];
+                         activeGuidesY = []; // Clear Y if X is stronger/closer
+                     }
+                 }
+             });
          }
+
+         // Check intersection with Y snap lines
+         // Anchor.y + t * uy = LineY => t = (LineY - Anchor.y) / uy
+         if (Math.abs(uy) > 0.01) {
+             snapLinesY.forEach(lineY => {
+                 const t = (lineY - resizeAnchor.y) / uy;
+                 if (t > 2) {
+                     if (Math.abs(t - projection) < minSnapDist) {
+                         minSnapDist = Math.abs(t - projection);
+                         snappedProjection = t;
+                         activeGuidesY = [lineY];
+                         activeGuidesX = []; // Prefer Y if stronger
+                     }
+                 }
+             });
+         }
+
+         setSnapGuides({ x: activeGuidesX, y: activeGuidesY });
+
+         // Limit min size
+         const newDiagonal = Math.max(2, snappedProjection);
+         setDragDiagonal(newDiagonal);
+
+         // Calculate new center
+         // New Corner Position = Anchor + (newDiagonal * UnitVector)
+         const newCornerX = resizeAnchor.x + newDiagonal * ux;
+         const newCornerY = resizeAnchor.y + newDiagonal * uy;
+         const newCenterX = (resizeAnchor.x + newCornerX) / 2;
+         const newCenterY = (resizeAnchor.y + newCornerY) / 2;
+
+         setResizeOffset({
+            x: newCenterX - m.x,
+            y: newCenterY - m.y
+         });
+
          return;
       }
 
@@ -430,19 +541,6 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
           return; 
       }
 
-      // Snapping Logic for Move
-      const tDim = calculatePhysicalDimensions(targetM.diagonalInches, targetM.orientation);
-      const tHalfW = tDim.width / 2;
-      const tHalfH = tDim.height / 2;
-      const tCx = targetM.x + rawDxInch;
-      const tCy = targetM.y + rawDyInch;
-
-      const isRotated = Math.abs(targetM.rotation || 0) > 1;
-      const tEdgesX = isRotated ? [tCx] : [tCx - tHalfW, tCx, tCx + tHalfW];
-      const tEdgesY = isRotated ? [tCy] : [tCy - tHalfH, tCy, tCy + tHalfH];
-
-      const otherMonitors = monitorList.filter(m => m.id !== dragTargetId);
-
       const SNAP_PX = 15;
       const snapInch = SNAP_PX / pxPerInch;
       let snapDx = 0;
@@ -452,39 +550,58 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
       let activeGuidesX: number[] = [];
       let activeGuidesY: number[] = [];
 
+      // Helper to get AABB lines (min, center, max) to enable robust snapping for rotated monitors
+      const getSnapLines = (m: MonitorConfig, cx: number, cy: number) => {
+        const corners = getMonitorCorners({ ...m, x: cx, y: cy });
+        const xs = corners.map(c => c.x);
+        const ys = corners.map(c => c.y);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        return {
+            x: [minX, (minX + maxX) / 2, maxX],
+            y: [minY, (minY + maxY) / 2, maxY]
+        };
+      };
+
+      const candidateX = targetM.x + rawDxInch;
+      const candidateY = targetM.y + rawDyInch;
+      const tLines = getSnapLines(targetM, candidateX, candidateY);
+      
+      const otherMonitors = monitorList.filter(m => m.id !== dragTargetId);
+
       otherMonitors.forEach(other => {
-        const otherRotated = Math.abs(other.rotation || 0) > 1;
-        const oDim = calculatePhysicalDimensions(other.diagonalInches, other.orientation);
-        const oHalfW = oDim.width / 2;
-        const oHalfH = oDim.height / 2;
-        const oEdgesX = otherRotated ? [other.x] : [other.x - oHalfW, other.x, other.x + oHalfW];
-        const oEdgesY = otherRotated ? [other.y] : [other.y - oHalfH, other.y, other.y + oHalfH];
+          const oLines = getSnapLines(other, other.x, other.y);
 
-        tEdgesX.forEach((tx) => {
-          oEdgesX.forEach((ox) => {
-            const dist = ox - tx; 
-            if (Math.abs(dist) < minXDist) {
-              minXDist = Math.abs(dist);
-              snapDx = dist;
-              activeGuidesX = [ox];
-            } else if (Math.abs(dist - snapDx) < 0.001 && minXDist < snapInch) {
-              if (!activeGuidesX.includes(ox)) activeGuidesX.push(ox);
-            }
+          // X Snapping
+          tLines.x.forEach(tx => {
+              oLines.x.forEach(ox => {
+                  const dist = ox - tx;
+                  if (Math.abs(dist) < minXDist) {
+                      minXDist = Math.abs(dist);
+                      snapDx = dist;
+                      activeGuidesX = [ox];
+                  } else if (Math.abs(dist - snapDx) < 0.001 && minXDist < snapInch) {
+                      // Same snap distance found (e.g. alignment on both left and right edges simultaneously)
+                      if (!activeGuidesX.includes(ox)) activeGuidesX.push(ox);
+                  }
+              });
           });
-        });
 
-        tEdgesY.forEach((ty) => {
-          oEdgesY.forEach((oy) => {
-            const dist = oy - ty;
-            if (Math.abs(dist) < minYDist) {
-              minYDist = Math.abs(dist);
-              snapDy = dist;
-              activeGuidesY = [oy];
-            } else if (Math.abs(dist - snapDy) < 0.001 && minYDist < snapInch) {
-              if (!activeGuidesY.includes(oy)) activeGuidesY.push(oy);
-            }
+          // Y Snapping
+          tLines.y.forEach(ty => {
+              oLines.y.forEach(oy => {
+                  const dist = oy - ty;
+                  if (Math.abs(dist) < minYDist) {
+                      minYDist = Math.abs(dist);
+                      snapDy = dist;
+                      activeGuidesY = [oy];
+                  } else if (Math.abs(dist - snapDy) < 0.001 && minYDist < snapInch) {
+                       if (!activeGuidesY.includes(oy)) activeGuidesY.push(oy);
+                  }
+              });
           });
-        });
       });
 
       setDragOffsetInch({
@@ -512,7 +629,7 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, isRotating, isResizing, dragTargetId, dragStartPos, dragOffsetInch, rotationStartAngle, baseRotation, config, onConfigChange, scale, isPlacingNew, monitorList, bounds, dragRotation, resizeStartDist, resizeBaseDiagonal, dragDiagonal]);
+  }, [isDragging, isRotating, isResizing, dragTargetId, dragStartPos, dragOffsetInch, rotationStartAngle, baseRotation, config, onConfigChange, scale, isPlacingNew, monitorList, bounds, dragRotation, dragDiagonal, resizeHandle, resizeAnchor]);
 
   const commitDrag = () => {
       if (!dragTargetId) return;
@@ -528,7 +645,9 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
           } else if (isResizing && dragDiagonal !== null) {
              newMonitors[dragTargetId] = {
                  ...targetMonitor,
-                 diagonalInches: parseFloat(dragDiagonal.toFixed(1))
+                 diagonalInches: parseFloat(dragDiagonal.toFixed(1)),
+                 x: targetMonitor.x + resizeOffset.x,
+                 y: targetMonitor.y + resizeOffset.y
              };
           } else {
              const finalX = targetMonitor.x + dragOffsetInch.x;
@@ -553,6 +672,8 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
       setDragOffsetInch({ x: 0, y: 0 });
       setDragRotation(0);
       setDragDiagonal(null);
+      setResizeHandle(null);
+      setResizeOffset({ x: 0, y: 0 });
       setSnapGuides({ x: [], y: [] });
   };
 
@@ -566,39 +687,38 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
   const getControlStyles = (rot: number) => {
     const r = ((rot % 360) + 360) % 360;
     
-    // Use offset of -9 for remove button to clear the resize handles at -3
     // Q1: Upright (-45 to 45 or 315-360)
-    // Visual Top Right is Local Top Right
+    // Visual Bottom Center -> Local Bottom Center
     if (r >= 315 || r < 45) {
         return {
-            remove: "-top-9 -right-9",
+            remove: "-bottom-9 left-1/2 -translate-x-1/2",
             rotate: "-top-8 left-1/2 -translate-x-1/2",
             rotateLine: "top-full left-1/2 -translate-x-1/2 w-0.5 h-2"
         };
     } 
     // Q2: 90 deg (45 to 135)
-    // Visual Top Right is Local Top Left
+    // Visual Bottom Center -> Local Right Center
     else if (r >= 45 && r < 135) {
         return {
-            remove: "-top-9 -left-9",
+            remove: "-right-9 top-1/2 -translate-y-1/2",
             rotate: "-left-8 top-1/2 -translate-y-1/2",
             rotateLine: "left-full top-1/2 -translate-y-1/2 w-2 h-0.5"
         };
     } 
     // Q3: 180 deg (135 to 225)
-    // Visual Top Right is Local Bottom Left
+    // Visual Bottom Center -> Local Top Center
     else if (r >= 135 && r < 225) {
         return {
-            remove: "-bottom-9 -left-9",
+            remove: "-top-9 left-1/2 -translate-x-1/2",
             rotate: "-bottom-8 left-1/2 -translate-x-1/2",
             rotateLine: "bottom-full left-1/2 -translate-x-1/2 w-0.5 h-2"
         };
     } 
     // Q4: 270 deg (225 to 315)
-    // Visual Top Right is Local Bottom Right
+    // Visual Bottom Center -> Local Left Center
     else {
         return {
-            remove: "-bottom-9 -right-9",
+            remove: "-left-9 top-1/2 -translate-y-1/2",
             rotate: "-right-8 top-1/2 -translate-y-1/2",
             rotateLine: "right-full top-1/2 -translate-y-1/2 w-2 h-0.5"
         };
@@ -703,11 +823,13 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
 
                     if (dragTargetId === m.id) {
                         if (isDragging) {
-                        currentX += dragOffsetInch.x;
-                        currentY += dragOffsetInch.y;
-                        }
-                        if (isRotating) {
-                        currentRot = dragRotation;
+                            currentX += dragOffsetInch.x;
+                            currentY += dragOffsetInch.y;
+                        } else if (isRotating) {
+                            currentRot = dragRotation;
+                        } else if (isResizing) {
+                            currentX += resizeOffset.x;
+                            currentY += resizeOffset.y;
                         }
                     }
                     
@@ -775,7 +897,7 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
                                 {/* TL */}
                                 <div
                                     className={`absolute -top-3 -left-3 w-6 h-6 bg-white text-gray-800 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-50 hover:bg-blue-100 cursor-nwse-resize shadow-md border border-gray-300`}
-                                    onMouseDown={(e) => handleResizeStart(e, m.id)}
+                                    onMouseDown={(e) => handleResizeStart(e, m.id, 'TL')}
                                     title="Resize (TL)"
                                 >
                                     {/* NW-SE Arrows (Rotated 90deg -> 45) */}
@@ -786,7 +908,7 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
                                 {/* TR */}
                                 <div
                                     className={`absolute -top-3 -right-3 w-6 h-6 bg-white text-gray-800 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-50 hover:bg-blue-100 cursor-nesw-resize shadow-md border border-gray-300`}
-                                    onMouseDown={(e) => handleResizeStart(e, m.id)}
+                                    onMouseDown={(e) => handleResizeStart(e, m.id, 'TR')}
                                     title="Resize (TR)"
                                 >
                                     {/* NE-SW Arrows (Rotated 90deg -> 135) */}
@@ -797,7 +919,7 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
                                 {/* BR */}
                                 <div
                                     className={`absolute -bottom-3 -right-3 w-6 h-6 bg-white text-gray-800 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-50 hover:bg-blue-100 cursor-nwse-resize shadow-md border border-gray-300`}
-                                    onMouseDown={(e) => handleResizeStart(e, m.id)}
+                                    onMouseDown={(e) => handleResizeStart(e, m.id, 'BR')}
                                     title="Resize (BR)"
                                 >
                                     {/* NW-SE Arrows (Rotated 90deg -> 45) */}
@@ -808,7 +930,7 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
                                 {/* BL */}
                                 <div
                                     className={`absolute -bottom-3 -left-3 w-6 h-6 bg-white text-gray-800 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-50 hover:bg-blue-100 cursor-nesw-resize shadow-md border border-gray-300`}
-                                    onMouseDown={(e) => handleResizeStart(e, m.id)}
+                                    onMouseDown={(e) => handleResizeStart(e, m.id, 'BL')}
                                     title="Resize (BL)"
                                 >
                                     {/* NE-SW Arrows (Rotated 90deg -> 135) */}
@@ -819,16 +941,17 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
                             </>
                         )}
 
-                        {/* Controls Overlay (Remove & Download) */}
+                        {/* Controls Overlay (Remove only) */}
                         {!isDragging && !isRotating && !isPlacingNew && !isResizing && (
                             <>
-                                {/* Remove Button (Visual Top Right, Offset) */}
+                                {/* Remove Button (Visual Bottom Center) */}
                                 <button
                                     className={`absolute ${controlStyles.remove} w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-50 hover:bg-red-600 shadow-md`}
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         onRemoveMonitor(m.id);
                                     }}
+                                    onMouseDown={(e) => e.stopPropagation()}
                                     title="Remove Monitor"
                                 >
                                     <div style={{ transform: `rotate(${-currentRot}deg)` }}>
@@ -837,25 +960,6 @@ const PreviewAndDownload: React.FC<PreviewAndDownloadProps> = ({ config, sourceI
                                         </svg>
                                     </div>
                                 </button>
-
-                                {/* Download Button (Center) - Remains Centered */}
-                                {sourceImage && (
-                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button 
-                                        className="pointer-events-auto transform hover:scale-110 transition-transform bg-black/60 p-2 rounded-full hover:bg-blue-600/80 text-white"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            downloadImage(m.id, m.label);
-                                        }}
-                                        title="Download this wallpaper"
-                                        style={{ transform: `rotate(${-currentRot}deg)` }}
-                                        >
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                            </svg>
-                                        </button>
-                                    </div>
-                                )}
                             </>
                         )}
                         </div>

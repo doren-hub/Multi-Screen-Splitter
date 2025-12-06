@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MonitorConfig, SetupConfig } from '../types';
 
 interface LayoutConfigProps {
@@ -8,6 +8,74 @@ interface LayoutConfigProps {
   onAddMonitor: () => string;
   onRemoveMonitor: (id: string) => void;
 }
+
+const NumberInput = ({ 
+  value, 
+  onChange, 
+  step = 1, 
+  className 
+}: { 
+  value: number; 
+  onChange: (val: number) => void; 
+  step?: number; 
+  className?: string;
+}) => {
+  const [strVal, setStrVal] = useState(value.toString());
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // If value changes externally (e.g. via drag), sync it.
+    // We check if the prop value is significantly different from current local parsed value.
+    // Since we don't push changes up until commit, 'value' prop stays constant while typing.
+    // If it changes, it means an external event happened, so we overwrite user input.
+    const parsed = parseFloat(strVal);
+    if (Math.abs(value - parsed) > 0.0001 || Number.isNaN(parsed)) {
+       setStrVal(value.toString());
+    }
+  }, [value]);
+
+  const commit = () => {
+    const parsed = parseFloat(strVal);
+    if (!isNaN(parsed)) {
+      // Only update if value actually changed
+      if (Math.abs(value - parsed) > 0.0001) {
+         onChange(parsed);
+      }
+    } else {
+      // Revert to valid prop value if input is invalid
+      setStrVal(value.toString());
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setStrVal(e.target.value);
+    // We do NOT call onChange here anymore.
+  };
+  
+  const handleBlur = () => {
+    commit();
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      commit();
+      inputRef.current?.blur();
+    }
+  };
+
+  return (
+    <input 
+      ref={inputRef}
+      type="number" 
+      step={step} 
+      value={strVal} 
+      onChange={handleChange} 
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+      className={className} 
+    />
+  );
+};
 
 const LayoutConfig: React.FC<LayoutConfigProps> = ({ config, onConfigChange, onAddMonitor, onRemoveMonitor }) => {
 
@@ -44,40 +112,36 @@ const LayoutConfig: React.FC<LayoutConfigProps> = ({ config, onConfigChange, onA
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
             <label className="block text-xs text-gray-400 mb-1">サイズ (インチ)</label>
-            <input
-              type="number"
-              step="0.1"
+            <NumberInput
+              step={0.1}
               value={m.diagonalInches}
-              onChange={(e) => handleMonitorChange(monitorId, 'diagonalInches', parseFloat(e.target.value))}
+              onChange={(val) => handleMonitorChange(monitorId, 'diagonalInches', val)}
               className="w-full bg-gray-900 text-white px-2 py-1 rounded border border-gray-700 focus:border-blue-500 focus:outline-none text-sm"
             />
           </div>
           <div>
              <label className="block text-xs text-gray-400 mb-1">回転 (度)</label>
              <div className="flex items-center gap-2">
-                <input
-                  type="number"
+                <NumberInput
                   value={m.rotation || 0}
-                  onChange={(e) => handleMonitorChange(monitorId, 'rotation', parseFloat(e.target.value))}
+                  onChange={(val) => handleMonitorChange(monitorId, 'rotation', val)}
                   className="w-full bg-gray-900 text-white px-2 py-1 rounded border border-gray-700 focus:border-blue-500 focus:outline-none text-sm"
                 />
              </div>
           </div>
           <div>
             <label className="block text-xs text-gray-400 mb-1">解像度 幅 (px)</label>
-            <input
-              type="number"
+            <NumberInput
               value={m.widthPx}
-              onChange={(e) => handleMonitorChange(monitorId, 'widthPx', parseInt(e.target.value))}
+              onChange={(val) => handleMonitorChange(monitorId, 'widthPx', Math.round(val))}
               className="w-full bg-gray-900 text-white px-2 py-1 rounded border border-gray-700 focus:border-blue-500 focus:outline-none text-sm"
             />
           </div>
           <div>
             <label className="block text-xs text-gray-400 mb-1">解像度 高さ (px)</label>
-            <input
-              type="number"
+            <NumberInput
               value={m.heightPx}
-              onChange={(e) => handleMonitorChange(monitorId, 'heightPx', parseInt(e.target.value))}
+              onChange={(val) => handleMonitorChange(monitorId, 'heightPx', Math.round(val))}
               className="w-full bg-gray-900 text-white px-2 py-1 rounded border border-gray-700 focus:border-blue-500 focus:outline-none text-sm"
             />
           </div>
@@ -86,21 +150,19 @@ const LayoutConfig: React.FC<LayoutConfigProps> = ({ config, onConfigChange, onA
         <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[10px] text-gray-500 mb-1">位置 X (インチ)</label>
-              <input
-                type="number"
-                step="0.1"
+              <NumberInput
+                step={0.1}
                 value={m.x}
-                onChange={(e) => handleMonitorChange(monitorId, 'x', parseFloat(e.target.value))}
+                onChange={(val) => handleMonitorChange(monitorId, 'x', val)}
                 className="w-full bg-gray-900 text-white px-2 py-1 rounded border border-gray-700 focus:border-blue-500 focus:outline-none text-sm"
               />
             </div>
             <div>
               <label className="block text-[10px] text-gray-500 mb-1">位置 Y (インチ)</label>
-              <input
-                type="number"
-                step="0.1"
+              <NumberInput
+                step={0.1}
                 value={m.y}
-                onChange={(e) => handleMonitorChange(monitorId, 'y', parseFloat(e.target.value))}
+                onChange={(val) => handleMonitorChange(monitorId, 'y', val)}
                 className="w-full bg-gray-900 text-white px-2 py-1 rounded border border-gray-700 focus:border-blue-500 focus:outline-none text-sm"
               />
             </div>
@@ -114,12 +176,11 @@ const LayoutConfig: React.FC<LayoutConfigProps> = ({ config, onConfigChange, onA
       <div className="flex-1 overflow-y-auto pr-2">
         <div className="mb-6">
             <label className="block text-xs text-gray-400 mb-1">ベゼル幅 / 隙間調整 (インチ)</label>
-            <input
-            type="number"
-            step="0.1"
-            value={config.bezelInches}
-            onChange={(e) => onConfigChange({ ...config, bezelInches: parseFloat(e.target.value) })}
-            className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-blue-500 focus:outline-none"
+            <NumberInput
+              step={0.1}
+              value={config.bezelInches}
+              onChange={(val) => onConfigChange({ ...config, bezelInches: val })}
+              className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-blue-500 focus:outline-none"
             />
         </div>
 

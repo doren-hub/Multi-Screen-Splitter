@@ -61,7 +61,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col font-sans">
       {/* Header */}
-      <header className="border-b border-gray-800 bg-gray-900/50 backdrop-blur-md sticky top-0 z-50">
+      <header className="border-b border-gray-800 bg-gray-900/50 backdrop-blur-md sticky top-0 z-[100]">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
              <div className="w-8 h-8 bg-gradient-to-tr from-blue-500 to-purple-500 rounded-lg flex items-center justify-center">
