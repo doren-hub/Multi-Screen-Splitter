@@ -1,0 +1,5 @@
+{
+  "name": "Multi Screen Splitter",
+  "description": "A specialized wallpaper tool for a 4-monitor setup (Top, Bottom, Left, Right) with automatic gap compensation and AI wallpaper generation.",
+  "requestFramePermissions": []
+}
