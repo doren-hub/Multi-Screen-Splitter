@@ -1,20 +1,77 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Multi Screen Splitter
 
-# Run and deploy your AI Studio app
+複数のモニターを並べた環境向けに、1 枚の画像をモニターごとの壁紙に分割するブラウザ用 Web アプリです。モニターの物理サイズ（インチ）と配置をもとに画像を切り出すので、モニターをまたいでも絵柄がつながって見えます。
 
-This contains everything you need to run your app locally.
+React + TypeScript + Vite で作られています。画像は Google Gemini API で生成することもできます。
 
-View your app in AI Studio: https://ai.studio/apps/drive/1VaOJOds9ipP3dzB6f7KjzQT9qUxuMz6x
+## 主な機能
 
-## Run Locally
+- **元画像の用意**
+  - ローカルの画像ファイルをアップロードする
+  - プロンプトから AI で壁紙を生成する（Gemini のモデル `gemini-3-pro-image-preview`、16:9・2K）
+- **モニター配置の編集**
+  - 初期状態は 4 台構成（24.5 インチ横置き 1 台、24.5 インチ縦置き 2 台、14 インチ横置き 1 台）
+  - モニターの追加・削除
+  - モニターごとに対角サイズ（インチ）、回転角度、解像度（幅・高さ px）、位置 X/Y（インチ）を数値で設定
+  - プレビュー上でモニターをドラッグして移動、ハンドルで回転・サイズ変更（回転は 0°/90°/180°/270° 付近に吸着、移動時は他モニターの端や中心に吸着）
+  - モニター番号は位置に応じて自動で振り直し（上から下、同じ行なら左から右）
+  - プレビューのラベル表示の切り替え
+- **書き出し**
+  - モニターごとに、設定した解像度の PNG を書き出す（ファイル名 `Monitor <番号>.png`）
+  - 全モニター分の一括ダウンロード（PNG を 1 枚ずつ順にダウンロード）
 
-**Prerequisites:**  Node.js
+## 動作環境
 
+- Node.js と npm（`package.json` では Vite 6、TypeScript 5.8、React 19 を使用）
+- モダンな Web ブラウザ
+- 画面の Tailwind CSS（`cdn.tailwindcss.com`）と、`index.html` の import map（`aistudiocdn.com`）を CDN から読み込むため、インターネット接続が必要です
+- AI 生成を使う場合は Gemini API キーが必要です
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+このリポジトリに入っているのは Web アプリだけです。macOS などのネイティブアプリ版は含まれていません。
+
+## セットアップと起動
+
+1. 依存パッケージをインストールします。
+
+   ```bash
+   npm install
+   ```
+
+2. （AI 生成を使う場合）プロジェクト直下に `.env.local` を作り、Gemini API キーを書きます。`.env.local` は `.gitignore` の対象（`*.local`）なのでコミットされません。
+
+   ```
+   GEMINI_API_KEY=<あなたの API キー>
+   ```
+
+3. 開発サーバーを起動します。`vite.config.ts` の設定で、ポート 3000、`0.0.0.0` で待ち受けます。
+
+   ```bash
+   npm run dev
+   ```
+
+そのほかのスクリプト:
+
+- `npm run build`: 本番用ビルド（`vite build`）
+- `npm run preview`: ビルド結果をプレビュー（`vite preview`）
+
+> **注意:** 現状では `index.html` にエントリーポイント（`index.tsx`）を読み込む script タグがないため、この手順だけではアプリが表示されません。下の「既知の制約・不具合」を参照してください。
+
+## 使い方
+
+1. 左側の「Source Image」で画像をアップロードするか、「AI Wallpaper Generator」にプロンプトを入力して「Generate Wallpaper」を押します。
+2. 「Monitor Configuration」かプレビュー上の操作で、モニターのサイズ・解像度・回転・位置を実際の配置に合わせます。
+3. 画面下のボタンで、モニターごとに、または「Download All Images」で全モニター分の PNG をダウンロードします。
+4. ダウンロードした画像を、OS の設定で各モニターの壁紙にします。
+
+## 既知の制約・不具合
+
+- **`index.html` にエントリーポイントがない:** `index.html` に `<script type="module" src="/index.tsx"></script>` 相当の記述がありません。`npm run build` を実行すると成功しますが、出力されるのは `index.html` だけでアプリのコードは含まれません。
+- **ベゼル幅の設定が結果に反映されない:** 「ベゼル幅 / 隙間調整」の値は保存されますが、画像の切り出しには使われていません。隙間は、モニターの位置 X/Y を離して配置することで表現します。
+- **アスペクト比は 16:9 固定:** 物理サイズは対角インチから 16:9 を前提に計算します。解像度を 16:9 以外にすると、画像の縦横比が物理サイズと合いません。
+- **型チェックのエラー:** `npx tsc --noEmit` を実行すると、`components/LayoutConfig.tsx` で `key` プロパティに関する型エラーが 1 件出ます（Vite のビルド自体は止まりません）。
+- **一括ダウンロード:** ブラウザによっては、複数ファイルの連続ダウンロードを許可する必要があります。
+- **API キーの扱い:** `vite.config.ts` は `GEMINI_API_KEY` をビルド時にクライアントのコードへ埋め込みます。ビルド結果を公開すると API キーも公開されるので注意してください。
+
+## ライセンス
+
+このリポジトリにはライセンスファイルがありません。
