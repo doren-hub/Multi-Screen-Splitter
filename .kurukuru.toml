@@ -1,0 +1,24 @@
+version = "0.60.0"
+base_branch = "main"
+merge_method = "squash"
+test = "npm run build"
+lint = "npx --no-install tsc --noEmit"
+constraints = [
+  "Management-only onboarding: preserve existing application behavior and README instructions.",
+  "Never read credentials, .env* or auth.json; builds must run without environment files or live API calls.",
+  "Do not modify the source checkout or register this independent clone.",
+  "No recursive runner launches, CI runner registration or permission bypasses.",
+  "Merge only after same-head local verification, independent Claude OK and ci-wait exit 0."
+]
+review_notes = ["No unit-test suite or dedicated linter exists; build and TypeScript checks are the available local verification."]
+review_allowed = []
+review_model = "claude-opus-5-5"
+review_effort = "low"
+
+[runner]
+kind = "codex"
+setup = "npm install --ignore-scripts --no-package-lock"
+deny_files = [".env", ".env.local", ".env.development", ".env.development.local", ".env.production", ".env.production.local", ".env.test", ".env.test.local", "auth.json"]
+
+[review]
+read_only = true

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '**/*.ts'
+      - '**/*.tsx'
+      - index.html
+      - metadata.json
+      - package.json
+      - tsconfig.json
+      - .gitignore
+      - AGENTS.md
+      - AGENTS.local.md
+      - .kurukuru.toml
+      - docs/**
+      - .github/workflows/ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 15
+    steps:
+      - name: Clean workspace before checkout
+        run: |
+          if [ -d .git ]; then
+            git reset --hard
+            git clean -ffdx
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: true
+      - name: Verify runner Python
+        run: python3 -c 'import sys; assert sys.version_info >= (3, 11, 8), sys.version'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies without lifecycle scripts
+        run: npm install --ignore-scripts --no-package-lock
+      - name: Reject environment files without reading them
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          assert not list(Path('.').glob('.env*')), 'Build requires a checkout without .env* files'
+          PY
+      - name: Build smoke check
+        run: npm run build
+      - name: TypeScript static check
+        run: npx --no-install tsc --noEmit
+      - name: Clean workspace after verification
+        if: always()
+        run: |
+          if [ -d .git ]; then
+            git reset --hard
+            git clean -ffdx
+          fi
